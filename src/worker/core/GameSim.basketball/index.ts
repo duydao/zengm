@@ -91,7 +91,7 @@ type PlayerGameSim = {
 	pos: string;
 	valueNoPot: number;
 	stat: any;
-	compositeRating: any;
+	compositeRating: { [k: string]: number };
 	skills: string[];
 	injured: boolean;
 	newInjury: boolean;
@@ -298,6 +298,7 @@ class GameSim {
 		const numPossessions =
 			((this.team[0].pace + this.team[1].pace) / 2) * 1.1 * paceFactor;
 		this.averagePossessionLength = 48 / (2 * numPossessions); // [min]
+		//console.log("numPossessions", numPossessions);
 
 		// Parameters
 		this.synergyFactor = 0.1; // How important is synergy?
@@ -310,7 +311,7 @@ class GameSim {
 		this.elamDone = false;
 		this.elamTarget = 0;
 
-		this.fatigueFactor = 0.055;
+		this.fatigueFactor = 0.1;
 
 		if (g.get("phase") === PHASE.PLAYOFFS) {
 			this.fatigueFactor /= 1.85;
@@ -323,6 +324,9 @@ class GameSim {
 
 		this.o = 0;
 		this.d = 1;
+
+		//console.log("Team on offense: ", this.team[this.o]);
+		//console.log("Team on defense: ", this.team[this.d]);
 	}
 
 	/**
@@ -409,24 +413,19 @@ class GameSim {
 
 		// Delete stuff that isn't needed before returning
 		for (const t of teamNums) {
-			delete this.team[t].compositeRating;
-
-			// @ts-expect-error
-			delete this.team[t].pace;
+			const team = this.team[t] as Partial<TeamGameSim>;
+			delete team.compositeRating;
+			delete team.pace;
 
 			for (let p = 0; p < this.team[t].player.length; p++) {
-				// @ts-expect-error
-				delete this.team[t].player[p].age;
-
-				// @ts-expect-error
-				delete this.team[t].player[p].valueNoPot;
-				delete this.team[t].player[p].compositeRating;
-
-				// @ts-expect-error
-				delete this.team[t].player[p].ptModifier;
-				delete this.team[t].player[p].stat.benchTime;
-				delete this.team[t].player[p].stat.courtTime;
-				delete this.team[t].player[p].stat.energy;
+				const player = this.team[t].player[p] as Partial<PlayerGameSim>;
+				delete player.age;
+				delete player.valueNoPot;
+				delete player.compositeRating;
+				delete player.ptModifier;
+				delete player.stat.benchTime;
+				delete player.stat.courtTime;
+				delete player.stat.energy;
 			}
 		}
 
@@ -625,6 +624,7 @@ class GameSim {
 			);
 		} else {
 			possessionLength = random.gauss(this.averagePossessionLength, 5 / 60);
+			//console.debug("randomized possession length", this.averagePossessionLength, possessionLength, possessionLength * 60);
 		}
 
 		if (twoForOne && !catchUp && !maintainLead) {
@@ -678,6 +678,8 @@ class GameSim {
 		// Clock
 		const intentionalFoul = this.shouldIntentionalFoul();
 		const possessionLength = this.getPossessionLength(intentionalFoul);
+
+		// this has to be done before getPossessionOutcome()
 		this.t -= possessionLength;
 		const outcome = this.getPossessionOutcome(
 			possessionLength,
@@ -734,21 +736,26 @@ class GameSim {
 	 * @return {number} Fatigue, from 0 to 1 (0 = lots of fatigue, 1 = none).
 	 */
 	fatigue(energy: number, skip?: boolean): number {
+		//console.debug("Energy", energy)
 		energy += 0.016;
 
-		if (energy > 1) {
-			energy = 1;
-		}
 		if (skip) {
+			//console.debug("fatigue (energy)", energy);
 			return energy;
 		}
 
-		// Late in games, or in OT, fatigue matters less
-		if (this.isLateGame()) {
-			const factor = 6 - this.t;
-			return (energy + factor) / (1 + factor);
+		if (energy < 0.9) {
+			return energy * 0.9;
 		}
 
+		// Late in games, or in OT, fatigue matters less
+		/*if (this.isLateGame()) {
+			const factor = 6 - this.t;
+			//console.debug("lategame fatigue (energy)", energy);
+			return (energy + factor) / (1 + factor);
+		}*/
+
+		//console.debug("fatigue (energy)", energy);
 		return energy;
 	}
 
@@ -887,6 +894,7 @@ class GameSim {
 			};
 
 			let ovrs = getOvrs(false);
+			//console.log("Overall Ratings", this.team[t], ovrs);
 
 			// What if too many players fouled out? Play them. Ideally would force non fouled out players to play first, but whatever. Without this, it would only play bottom of the roster guys (tied at -Infinity)
 			if (numEligiblePlayers(ovrs) < this.numPlayersOnCourt) {
@@ -1024,129 +1032,123 @@ class GameSim {
 		return substitutions;
 	}
 
+	private getSkillsCount(t: number) {
+		// Count all the *fractional* skills of the active players on a team (including duplicates)
+		const skillsCount = {
+			threePointer: 0,
+			body: 0,
+			dribbling: 0,
+			interiorDef: 0,
+			perimeterDef: 0,
+			lowPost: 0,
+			passing: 0,
+			rebound: 0,
+		};
+		for (let i = 0; i < this.numPlayersOnCourt; i++) {
+			const p = this.playersOnCourt[t][i];
+			const ratings = this.team[t].player[p].compositeRating;
+
+			// 1 / (1 + e^-(15 * (x - 0.61))) from 0 to 1
+			// 0.61 is not always used - keep in sync with skills.js!
+			skillsCount.threePointer += helpers.sigmoid(
+				ratings.shootingThreePointer,
+				15,
+				0.59,
+			);
+			skillsCount.body += helpers.sigmoid(ratings.athleticism, 15, 0.63);
+			skillsCount.dribbling += helpers.sigmoid(ratings.dribbling, 15, 0.68);
+			skillsCount.interiorDef += helpers.sigmoid(
+				ratings.defenseInterior,
+				15,
+				0.57,
+			);
+			skillsCount.perimeterDef += helpers.sigmoid(
+				ratings.defensePerimeter,
+				15,
+				0.61,
+			);
+			skillsCount.lowPost += helpers.sigmoid(ratings.shootingLowPost, 15, 0.61);
+			skillsCount.passing += helpers.sigmoid(ratings.passing, 15, 0.63);
+			skillsCount.rebound += helpers.sigmoid(ratings.rebounding, 15, 0.61);
+		}
+		return skillsCount;
+	}
+
 	/**
 	 * Update synergy.
 	 *
 	 * This should be called after this.updatePlayersOnCourt as it only produces different output when the players on the court change.
 	 */
 	updateSynergy() {
+		const sigmoid = helpers.sigmoid;
 		for (const t of teamNums) {
-			// Count all the *fractional* skills of the active players on a team (including duplicates)
-			const skillsCount = {
-				"3": 0,
-				A: 0,
-				B: 0,
-				Di: 0,
-				Dp: 0,
-				Po: 0,
-				Ps: 0,
-				R: 0,
-			};
-
-			for (let i = 0; i < this.numPlayersOnCourt; i++) {
-				const p = this.playersOnCourt[t][i];
-
-				// 1 / (1 + e^-(15 * (x - 0.61))) from 0 to 1
-				// 0.61 is not always used - keep in sync with skills.js!
-
-				skillsCount["3"] += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.shootingThreePointer,
-					15,
-					0.59,
-				);
-				skillsCount.A += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.athleticism,
-					15,
-					0.63,
-				);
-				skillsCount.B += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.dribbling,
-					15,
-					0.68,
-				);
-				skillsCount.Di += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.defenseInterior,
-					15,
-					0.57,
-				);
-				skillsCount.Dp += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.defensePerimeter,
-					15,
-					0.61,
-				);
-				skillsCount.Po += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.shootingLowPost,
-					15,
-					0.61,
-				);
-				skillsCount.Ps += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.passing,
-					15,
-					0.63,
-				);
-				skillsCount.R += helpers.sigmoid(
-					this.team[t].player[p].compositeRating.rebounding,
-					15,
-					0.61,
-				);
-			}
+			const skillsCount = this.getSkillsCount(t);
 
 			// Base offensive synergy
-			this.team[t].synergy.off = 0;
-			this.team[t].synergy.off += 5 * helpers.sigmoid(skillsCount["3"], 3, 2); // 5 / (1 + e^-(3 * (x - 2))) from 0 to 5
+			const offensiveSynergyValues = [
+				// 5 / (1 + e^-(3 * (x - 2))) from 0 to 5
+				5 * sigmoid(skillsCount.threePointer, 3, 2),
 
-			this.team[t].synergy.off +=
-				3 * helpers.sigmoid(skillsCount.B, 15, 0.75) +
-				helpers.sigmoid(skillsCount.B, 5, 1.75); // 3 / (1 + e^-(15 * (x - 0.75))) + 1 / (1 + e^-(5 * (x - 1.75))) from 0 to 5
+				// 3 / (1 + e^-(15 * (x - 0.75))) + 1 / (1 + e^-(5 * (x - 1.75))) from 0 to 5
+				3 * sigmoid(skillsCount.dribbling, 15, 0.75),
+				sigmoid(skillsCount.dribbling, 5, 1.75),
 
-			this.team[t].synergy.off +=
-				3 * helpers.sigmoid(skillsCount.Ps, 15, 0.75) +
-				helpers.sigmoid(skillsCount.Ps, 5, 1.75) +
-				helpers.sigmoid(skillsCount.Ps, 5, 2.75); // 3 / (1 + e^-(15 * (x - 0.75))) + 1 / (1 + e^-(5 * (x - 1.75))) + 1 / (1 + e^-(5 * (x - 2.75))) from 0 to 5
+				// 3 / (1 + e^-(15 * (x - 0.75))) + 1 / (1 + e^-(5 * (x - 1.75))) + 1 / (1 + e^-(5 * (x - 2.75))) from 0 to 5
+				3 * sigmoid(skillsCount.passing, 15, 0.75),
+				sigmoid(skillsCount.passing, 5, 1.75),
+				sigmoid(skillsCount.passing, 5, 2.75),
 
-			this.team[t].synergy.off += helpers.sigmoid(skillsCount.Po, 15, 0.75); // 1 / (1 + e^-(15 * (x - 0.75))) from 0 to 5
+				// 1 / (1 + e^-(15 * (x - 0.75))) from 0 to 5,
+				sigmoid(skillsCount.lowPost, 15, 0.75),
 
-			this.team[t].synergy.off +=
-				helpers.sigmoid(skillsCount.A, 15, 1.75) +
-				helpers.sigmoid(skillsCount.A, 5, 2.75); // 1 / (1 + e^-(15 * (x - 1.75))) + 1 / (1 + e^-(5 * (x - 2.75))) from 0 to 5
+				// 1 / (1 + e^-(15 * (x - 1.75))) + 1 / (1 + e^-(5 * (x - 2.75))) from 0 to 5
+				sigmoid(skillsCount.body, 15, 1.75),
+				sigmoid(skillsCount.body, 5, 2.75),
+			];
+			const offensiveSynergy =
+				offensiveSynergyValues.reduce((acc, val) => acc + val, 0) / 17;
 
-			this.team[t].synergy.off /= 17; // Punish teams for not having multiple perimeter skills
+			// Perimeter factor is a value between 0 and 1, representing the perimeter skills
+			const perimeterSkills =
+				skillsCount.dribbling + skillsCount.passing + skillsCount.threePointer;
+			const perimeterFactor =
+				helpers.bound(Math.sqrt(1 + perimeterSkills) - 1, 0, 2) / 2;
 
-			const perimFactor =
-				helpers.bound(
-					Math.sqrt(1 + skillsCount.B + skillsCount.Ps + skillsCount["3"]) - 1,
-					0,
-					2,
-				) / 2; // Between 0 and 1, representing the perimeter skills
+			// Punish teams for not having multiple perimeter skills by weighting offensive synergy and perimeter skills
+			this.team[t].synergy.off = offensiveSynergy * 0.5 + perimeterFactor * 0.5;
 
-			this.team[t].synergy.off *= 0.5 + 0.5 * perimFactor; // Defensive synergy
+			// Defensive synergy
+			const defensiveSynergyValues = [
+				// 1 / (1 + e^-(15 * (x - 0.75))) from 0 to 5
+				helpers.sigmoid(skillsCount.perimeterDef, 15, 0.75),
 
-			this.team[t].synergy.def = 0;
-			this.team[t].synergy.def += helpers.sigmoid(skillsCount.Dp, 15, 0.75); // 1 / (1 + e^-(15 * (x - 0.75))) from 0 to 5
+				// 2 / (1 + e^-(15 * (x - 0.75))) from 0 to 5
+				2 * helpers.sigmoid(skillsCount.interiorDef, 15, 0.75),
 
-			this.team[t].synergy.def += 2 * helpers.sigmoid(skillsCount.Di, 15, 0.75); // 2 / (1 + e^-(15 * (x - 0.75))) from 0 to 5
+				// 1 / (1 + e^-(5 * (x - 2))) + 1 / (1 + e^-(5 * (x - 3.25))) from 0 to 5
+				helpers.sigmoid(skillsCount.body, 5, 2),
+				helpers.sigmoid(skillsCount.body, 5, 3.25),
+			];
+			this.team[t].synergy.def =
+				defensiveSynergyValues.reduce((acc, val) => acc + val, 0) / 6;
 
-			this.team[t].synergy.def +=
-				helpers.sigmoid(skillsCount.A, 5, 2) +
-				helpers.sigmoid(skillsCount.A, 5, 3.25); // 1 / (1 + e^-(5 * (x - 2))) + 1 / (1 + e^-(5 * (x - 3.25))) from 0 to 5
-
-			this.team[t].synergy.def /= 6; // Rebounding synergy
-
-			this.team[t].synergy.reb = 0;
-			this.team[t].synergy.reb +=
-				helpers.sigmoid(skillsCount.R, 15, 0.75) +
-				helpers.sigmoid(skillsCount.R, 5, 1.75); // 1 / (1 + e^-(15 * (x - 0.75))) + 1 / (1 + e^-(5 * (x - 1.75))) from 0 to 5
-
-			this.team[t].synergy.reb /= 4;
+			// Rebounding synergy
+			const reboundSynergy = [
+				// 1 / (1 + e^-(15 * (x - 0.75))) + 1 / (1 + e^-(5 * (x - 1.75))) from 0 to 5
+				helpers.sigmoid(skillsCount.rebound, 15, 0.75),
+				helpers.sigmoid(skillsCount.rebound, 5, 1.75),
+			];
+			this.team[t].synergy.reb =
+				reboundSynergy.reduce((acc, val) => acc + val, 0) / 4;
 		}
 	}
 
-	/**
-	 * Update team composite ratings.
-	 *
-	 * This should be called once every possession, after this.updatePlayersOnCourt and this.updateSynergy as they influence output, to update the team composite ratings based on the players currently on the court.
-	 */
-	updateTeamCompositeRatings() {
+	// @ts-ignore
+	private scaleRatings(
+		teamNum: TeamNum,
+		team: TeamGameSim,
+		opponent: TeamGameSim,
+	) {
 		// Only update ones that are actually used
 		const toUpdate = [
 			"dribbling",
@@ -1156,60 +1158,88 @@ class GameSim {
 			"defensePerimeter",
 			"blocking",
 		];
-
 		const foulLimit = this.getFoulTroubleLimit();
+		const diff = team.stat.pts - opponent.stat.pts;
+		const perfFactor = 1 - 0.2 * Math.tanh(diff / 60);
+		for (let j = 0; j < toUpdate.length; j++) {
+			const rating = toUpdate[j];
+			team.compositeRating[rating] = 0;
 
+			for (let i = 0; i < this.numPlayersOnCourt; i++) {
+				const p = this.playersOnCourt[teamNum][i];
+				const player = team.player[p];
+
+				let foulLimitFactor = 1;
+				if (
+					rating === "defense" ||
+					rating === "defensePerimeter" ||
+					rating === "blocking"
+				) {
+					const pf = team.player[p].stat.pf;
+					if (pf === foulLimit) {
+						foulLimitFactor *= 0.9;
+					} else if (pf > foulLimit) {
+						foulLimitFactor *= 0.75;
+					}
+				}
+
+				switch (rating) {
+					case "defense":
+						if (player.skills.includes("Di") || player.skills.includes("Dp")) {
+							team.compositeRating[rating] *= 1.1;
+						}
+						break;
+					case "defensePerimeter":
+					case "stealing":
+						if (player.skills.includes("Dp")) {
+							team.compositeRating[rating] *= 1.1;
+						}
+						break;
+					case "defenseInterior":
+					case "blocking":
+						if (player.skills.includes("Di")) {
+							team.compositeRating[rating] *= 1.1;
+						}
+						break;
+				}
+
+				team.compositeRating[rating] +=
+					team.player[p].compositeRating[rating] *
+					this.fatigue(team.player[p].stat.energy, true) *
+					perfFactor;
+				//* foulLimitFactor;
+				//team.compositeRating[rating] += team.player[p].compositeRating[rating];
+			}
+
+			// divide by starters
+			team.compositeRating[rating] /= 5;
+		}
+	}
+
+	/**
+	 * Update team composite ratings.
+	 *
+	 * This should be called once every possession, after this.updatePlayersOnCourt and this.updateSynergy as they influence output, to update the team composite ratings based on the players currently on the court.
+	 */
+	updateTeamCompositeRatings() {
 		// Scale composite ratings
 		for (let k = 0; k < teamNums.length; k++) {
 			const t = teamNums[k];
-			const oppT = teamNums[1 - k];
-			const diff = this.team[t].stat.pts - this.team[oppT].stat.pts;
+			const team = this.team[t];
+			const factor = this.synergyFactor;
+			const ratings = team.compositeRating;
+			const synergies = team.synergy;
 
-			const perfFactor = 1 - 0.2 * Math.tanh(diff / 60);
+			const opponentTeamId = teamNums[k == 0 ? 1 : 0];
+			this.scaleRatings(t, team, this.team[opponentTeamId]);
 
-			for (let j = 0; j < toUpdate.length; j++) {
-				const rating = toUpdate[j];
-				this.team[t].compositeRating[rating] = 0;
-
-				for (let i = 0; i < this.numPlayersOnCourt; i++) {
-					const p = this.playersOnCourt[t][i];
-
-					let foulLimitFactor = 1;
-					if (
-						rating === "defense" ||
-						rating === "defensePerimeter" ||
-						rating === "blocking"
-					) {
-						const pf = this.team[t].player[p].stat.pf;
-						if (pf === foulLimit) {
-							foulLimitFactor *= 0.9;
-						} else if (pf > foulLimit) {
-							foulLimitFactor *= 0.75;
-						}
-					}
-
-					this.team[t].compositeRating[rating] +=
-						this.team[t].player[p].compositeRating[rating] *
-						this.fatigue(this.team[t].player[p].stat.energy) *
-						perfFactor *
-						foulLimitFactor;
-				}
-
-				this.team[t].compositeRating[rating] /= 5;
-			}
-
-			this.team[t].compositeRating.dribbling +=
-				this.synergyFactor * this.team[t].synergy.off;
-			this.team[t].compositeRating.passing +=
-				this.synergyFactor * this.team[t].synergy.off;
-			this.team[t].compositeRating.rebounding +=
-				this.synergyFactor * this.team[t].synergy.reb;
-			this.team[t].compositeRating.defense +=
-				this.synergyFactor * this.team[t].synergy.def;
-			this.team[t].compositeRating.defensePerimeter +=
-				this.synergyFactor * this.team[t].synergy.def;
-			this.team[t].compositeRating.blocking +=
-				this.synergyFactor * this.team[t].synergy.def;
+			ratings.dribbling += synergies.off * factor;
+			ratings.passing += synergies.off * factor;
+			ratings.rebounding += synergies.reb * factor;
+			ratings.defense += synergies.def * factor;
+			ratings.defensePerimeter += synergies.def * factor;
+			ratings.defenseInterior += synergies.def * factor;
+			ratings.blocking += synergies.def * factor;
 		}
 	}
 
@@ -1226,15 +1256,12 @@ class GameSim {
 					this.recordStat(t, p, "min", possessionLength);
 					this.recordStat(t, p, "courtTime", possessionLength);
 
-					// This used to be 0.04. Increase more to lower PT
-					this.recordStat(
-						t,
-						p,
-						"energy",
+					// This used to be 0.04. Increase more to lower play time
+					const energyValue =
 						-possessionLength *
-							this.fatigueFactor *
-							(1 - this.team[t].player[p].compositeRating.endurance),
-					);
+						this.fatigueFactor *
+						(1 - this.team[t].player[p].compositeRating.endurance);
+					this.recordStat(t, p, "energy", energyValue);
 
 					if (this.team[t].player[p].stat.energy < 0) {
 						this.team[t].player[p].stat.energy = 0;
@@ -1266,6 +1293,11 @@ class GameSim {
 
 		// Modulate by pace - since injuries are evaluated per possession, but really probably happen per minute played
 		baseRate *= 100 / g.get("pace");
+
+		// medic adjusted base rate
+		if (this.team[this.o].id === g.get("userTid")) {
+			baseRate *= 0.5;
+		}
 
 		for (const t of teamNums) {
 			for (let p = 0; p < this.team[t].player.length; p++) {
@@ -1330,7 +1362,8 @@ class GameSim {
 		}
 
 		// Turnover?
-		if (Math.random() < this.probTov()) {
+		const turnoverRate = this.probTov();
+		if (Math.random() <= turnoverRate) {
 			return this.doTov(); // tov
 		}
 
@@ -1430,15 +1463,28 @@ class GameSim {
 	 * @param {number} shooter Integer from 0 to 4 representing the index of this.playersOnCourt[this.o] for the shooting player.
 	 * @return {string} Either "fg" or output of this.doReb, depending on make or miss and free throws.
 	 */
-	doShot(shooter: PlayerNumOnCourt, possessionLength: number) {
+	doShot(
+		shooter: PlayerNumOnCourt,
+		possessionLength: number,
+		passer?: PlayerNumOnCourt,
+	) {
 		const p = this.playersOnCourt[this.o][shooter];
+		const player = this.team[this.o].player[p];
 		const currentFatigue = this.fatigue(
 			this.team[this.o].player[p].stat.energy,
 		);
 
+		//(this.team[this.o].id === 4 && Math.random() < 0.41 &&
+		// (shootingThreePointerScaled * 0.3 + 0.36) * g.get("threePointAccuracyFactor") > 0.3 &&
+		// (this.team[this.o].player[p].pos !== 'C' && this.team[this.o].player[p].pos !== 'PF' &&
+		// this.team[this.o].player[p].pos !== 'FC') )
+
 		// Is this an "assisted" attempt (i.e. an assist will be recorded if it's made)
-		let passer: PlayerNumOnCourt | undefined;
-		if (this.probAst() > Math.random() && this.numPlayersOnCourt > 1) {
+		if (
+			passer === undefined &&
+			this.probAst() > Math.random() &&
+			this.numPlayersOnCourt > 1
+		) {
 			const ratios = this.ratingArray("passing", this.o, 10);
 			passer = pickPlayer(ratios, shooter);
 		}
@@ -1460,6 +1506,13 @@ class GameSim {
 		} else if (shootingThreePointerScaled2 < 0.45) {
 			shootingThreePointerScaled2 =
 				0.1 + (shootingThreePointerScaled2 - 0.35) * (0.35 / 0.1);
+		}
+
+		if (
+			["C", "FC", "PF"].includes(player.pos) &&
+			shootingThreePointerScaled2 <= 0.45
+		) {
+			shootingThreePointerScaled2 = 0;
 		}
 
 		// In some situations (4th quarter late game situations depending on score, and last second heaves in other quarters) players shoot more 3s
@@ -1501,23 +1554,24 @@ class GameSim {
 
 			this.recordPlay("fgaTp", this.o, [this.team[this.o].player[p].name]);
 		} else {
-			const r1 =
+			const midrangeRating =
 				0.8 *
 				Math.random() *
 				this.team[this.o].player[p].compositeRating.shootingMidRange;
-			const r2 =
+
+			const atRimRating =
 				Math.random() *
 				(this.team[this.o].player[p].compositeRating.shootingAtRim +
 					this.synergyFactor *
 						(this.team[this.o].synergy.off - this.team[this.d].synergy.def)); // Synergy makes easy shots either more likely or less likely
 
-			const r3 =
+			const lowPostRating =
 				Math.random() *
 				(this.team[this.o].player[p].compositeRating.shootingLowPost +
 					this.synergyFactor *
 						(this.team[this.o].synergy.off - this.team[this.d].synergy.def)); // Synergy makes easy shots either more likely or less likely
 
-			if (r1 > r2 && r1 > r3) {
+			if (midrangeRating > atRimRating && midrangeRating > lowPostRating) {
 				// Two point jumper
 				type = "midRange";
 				probMissAndFoul = 0.07;
@@ -1528,7 +1582,7 @@ class GameSim {
 				this.recordPlay("fgaMidRange", this.o, [
 					this.team[this.o].player[p].name,
 				]);
-			} else if (r2 > r3) {
+			} else if (atRimRating > lowPostRating) {
 				// Dunk, fast break or half court
 				type = "atRim";
 				probMissAndFoul = 0.37;
@@ -1567,19 +1621,22 @@ class GameSim {
 			foulFactor *= 0.4;
 		}
 
-		probMissAndFoul *= foulFactor;
-		probAndOne *= foulFactor;
-		probMake =
-			(probMake -
-				0.25 * this.team[this.d].compositeRating.defense +
-				this.synergyFactor *
-					(this.team[this.o].synergy.off - this.team[this.d].synergy.def)) *
-			currentFatigue;
+		probMissAndFoul *= foulFactor * 0.5;
+		probAndOne *= foulFactor * 0.5;
+
+		// adjust offensive synergy
+		const offensiveSynergy =
+			(this.team[this.o].synergy.off - this.team[this.d].synergy.def) *
+			this.synergyFactor;
+		// only use a quarter of the defensive value when adjusting the probability
+		const defensivePower = this.team[this.d].compositeRating.defense * 0.25;
+		// adjust probability
+		probMake += offensiveSynergy * currentFatigue - defensivePower;
 
 		// Adjust probMake for end of quarter situations, where shot quality will be lower without much time
 
-		if (this.t === 0 && possessionLength < 6 / 60) {
-			probMake *= Math.sqrt(possessionLength / (8 / 60));
+		if (this.t === 0 && possessionLength < 1 / 60) {
+			//probMake *= Math.sqrt(possessionLength / (8 / 60));
 		}
 
 		// Assisted shots are easier
@@ -1591,8 +1648,12 @@ class GameSim {
 			return this.doBlk(shooter, type); // orb or drb
 		}
 
-		// Make
-		if (probMake > Math.random()) {
+		const threshold = Math.random();
+		if (this.team[this.o].id === 4) {
+			//console.log(type, this.team[this.o].player[shooter].name, probMake.toFixed(2), threshold.toFixed(2), this.team[this.o].player[shooter]);
+		}
+		// Make the shot
+		if (probMake > threshold) {
 			// And 1
 			if (probAndOne > Math.random()) {
 				return this.doFg(shooter, passer, type, true); // fg, orb, or drb
@@ -1605,6 +1666,9 @@ class GameSim {
 		if (probMissAndFoul > Math.random()) {
 			const threePointer = type === "threePointer" && g.get("threePointers");
 
+			if (this.team[this.d].id === 4) {
+				//console.log("foulFactor", this.team[this.o].player[p], foulFactor)
+			}
 			this.doPf(this.d, threePointer ? "pfTP" : "pfFG", shooter);
 
 			if (threePointer) {
@@ -1612,6 +1676,23 @@ class GameSim {
 			}
 
 			return this.doFt(shooter, 2); // fg, orb, or drb
+		}
+
+		// chance to pass if oIQ is high
+		if (
+			this.probAst() > Math.random() &&
+			this.numPlayersOnCourt > 1
+			// && this.team[this.o].id === g.get("userTid")
+		) {
+			const ratios = this.ratingArray("usage", this.o, 1.25);
+			const target = pickPlayer(ratios, shooter);
+			console.log(
+				player.name,
+				"pass to ",
+				this.team[this.o].player[this.playersOnCourt[this.o][target]].name,
+				player.compositeRating["passing"].toFixed(2),
+			);
+			this.doShot(target, possessionLength, shooter);
 		}
 
 		// Miss
@@ -2061,8 +2142,9 @@ class GameSim {
 		if (fouler === undefined) {
 			fouler = pickPlayer(this.ratingArray("fouling", t));
 		}
+
 		const p = this.playersOnCourt[t][fouler];
-		this.recordStat(this.d, p, "pf");
+		this.recordStat(t, p, "pf");
 
 		const names = [this.team[this.d].player[p].name];
 		if (shooter !== undefined) {
@@ -2071,6 +2153,10 @@ class GameSim {
 			);
 		}
 		this.recordPlay(type, this.d, names);
+
+		if (this.team[t].id === 4) {
+			//console.debug("Personal foul", type, names.join(","))
+		}
 
 		// Foul out
 		const foulsNeededToFoulOut = g.get("foulsNeededToFoulOut");
@@ -2187,7 +2273,12 @@ class GameSim {
 	 * @param {number} amt Amount to increment (default is 1).
 	 */
 	recordStat(t: TeamNum, p: number, s: Stat, amt: number = 1) {
-		this.team[t].player[p].stat[s] += amt;
+		if (s === "energy" && this.team[t].id === 4) {
+			// ignore
+			//this.team[t].player[p].stat[s] += amt;
+		} else {
+			this.team[t].player[p].stat[s] += amt;
+		}
 
 		if (
 			s !== "gs" &&
@@ -2227,6 +2318,7 @@ class GameSim {
 				});
 			}
 		}
+		//console.log("record stat for", this.team[t].player[p].name, "stat:", s, "amount:", amt)
 	}
 
 	recordPlay(type: PlayType, t?: TeamNum, names?: string[], extra?: any) {

@@ -1012,6 +1012,8 @@ export type Relative = {
 };
 
 export type MinimalPlayerRatings = {
+	pid?: number;
+	tid?: number;
 	ovr: number;
 	pot: number;
 	fuzz: number;

@@ -4,6 +4,7 @@ import type {
 	PlayerRatings,
 	RatingKey,
 } from "../../../common/types.basketball";
+import { percentile } from "../../../mod/util";
 
 type RatingFormula = {
 	ageModifier: (age: number) => number;
@@ -13,21 +14,21 @@ type RatingFormula = {
 const shootingFormula: RatingFormula = {
 	ageModifier: (age: number) => {
 		// Reverse most of the age-related decline in calcBaseChange
-		if (age <= 27) {
+		if (age <= 30) {
 			return 0;
 		}
 
-		if (age <= 29) {
+		if (age <= 35) {
 			return 0.5;
 		}
 
-		if (age <= 31) {
+		if (age <= 40) {
 			return 1.5;
 		}
 
 		return 2;
 	},
-	changeLimits: () => [-3, 13],
+	changeLimits: () => [-3, 20],
 };
 const iqFormula: RatingFormula = {
 	ageModifier: (age: number) => {
@@ -76,7 +77,7 @@ const ratingsFormulas: Record<Exclude<RatingKey, "hgt">, RatingFormula> = {
 			}
 
 			if (age <= 30) {
-				return -2;
+				return -1;
 			}
 
 			if (age <= 35) {
@@ -84,12 +85,12 @@ const ratingsFormulas: Record<Exclude<RatingKey, "hgt">, RatingFormula> = {
 			}
 
 			if (age <= 40) {
-				return -4;
+				return -5;
 			}
 
 			return -8;
 		},
-		changeLimits: () => [-12, 2],
+		changeLimits: () => [-4, 2],
 	},
 	jmp: {
 		ageModifier: (age: number) => {
@@ -111,7 +112,7 @@ const ratingsFormulas: Record<Exclude<RatingKey, "hgt">, RatingFormula> = {
 
 			return -10;
 		},
-		changeLimits: () => [-12, 2],
+		changeLimits: () => [-4, 2],
 	},
 	endu: {
 		ageModifier: (age: number) => {
@@ -170,21 +171,19 @@ const calcBaseChange = (age: number, coachingRank: number): number => {
 	let val: number;
 
 	if (age <= 21) {
+		val = random.uniform(4, 10);
+	} else if (age <= 24) {
+		val = 3;
+	} else if (age <= 28) {
 		val = 2;
-	} else if (age <= 25) {
+	} else if (age <= 30) {
 		val = 1;
-	} else if (age <= 27) {
-		val = 0;
-	} else if (age <= 29) {
-		val = -1;
-	} else if (age <= 31) {
-		val = -2;
 	} else if (age <= 34) {
-		val = -3;
+		val = 0;
 	} else if (age <= 40) {
-		val = -4;
+		val = -2;
 	} else if (age <= 43) {
-		val = -5;
+		val = -4;
 	} else {
 		val = -6;
 	}
@@ -213,7 +212,7 @@ const calcBaseChange = (age: number, coachingRank: number): number => {
 	return val;
 };
 
-const developSeason = (
+const developSeason = async (
 	ratings: PlayerRatings,
 	age: number,
 	coachingRank: number = (g.get("numActiveTeams") + 1) / 2,
@@ -231,19 +230,53 @@ const developSeason = (
 		}
 	}
 
-	const baseChange = calcBaseChange(age, coachingRank);
+	// keep players young for a bit longer
+
+	/*
+  if (age > 35 && age <= 40) {
+	} else if (age > 30 && age <= 35) {
+	} else if (age > 25 && age <= 30) {
+		age = 20;
+	} else if (age > 20 && age <= 25) {
+
+	}*/
+
+	const baseChanges = [];
+	for (let i = 0; i < 100; i++) {
+		baseChanges.push(calcBaseChange(age, coachingRank));
+	}
+	baseChanges.sort((a, b) => a - b);
+	const baseChange = percentile(baseChanges, 0.75);
+	//console.log("baseChange", baseChange, baseChanges[0] + "-" + baseChanges[baseChanges.length-1]);
 
 	for (const key of helpers.keys(ratingsFormulas)) {
 		const ageModifier = ratingsFormulas[key].ageModifier(age);
 		const changeLimits = ratingsFormulas[key].changeLimits(age);
 
-		ratings[key] = limitRating(
-			ratings[key] +
-				helpers.bound(
-					(baseChange + ageModifier) * random.uniform(0.4, 1.4),
-					changeLimits[0],
-					changeLimits[1],
-				),
+		// get the best out of x
+		const newRatings = [];
+		for (let i = 0; i < 100; i++) {
+			const rating = limitRating(
+				ratings[key] +
+					helpers.bound(
+						(baseChange + ageModifier) * random.uniform(0.4, 1.4),
+						changeLimits[0],
+						changeLimits[1],
+					),
+			);
+			newRatings.push(rating);
+		}
+		newRatings.sort((a, b) => a - b);
+		const newRating = percentile(newRatings, 0.75);
+		//console.log("newRating", key, newRating, newRatings[0] + "-" + newRatings[newRatings.length-1]);
+
+		// @ts-ignore
+		ratings[key] = await self.mods.playerProgressManager.updateRating(
+			ratings,
+			key,
+			newRating,
+			age,
+			coachingRank,
 		);
 	}
 };

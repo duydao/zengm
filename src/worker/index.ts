@@ -4,8 +4,12 @@ import * as common from "../common";
 import * as core from "./core";
 import * as db from "./db";
 import * as util from "./util";
+import { initMods } from "../mod/index";
 
 self.bbgm = { api, ...common, ...core, ...db, ...util };
+
+// @ts-ignore
+self.mods = initMods(self.bbgm);
 
 const categories = [
 	"actions",

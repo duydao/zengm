@@ -20,7 +20,11 @@ const developSeason = async (
 ) => {
 	bySport({
 		baseball: developSeasonBaseball(ratings as any, age, coachingRank),
-		basketball: developSeasonBasketball(ratings as any, age, coachingRank),
+		basketball: await developSeasonBasketball(
+			ratings as any,
+			age,
+			coachingRank,
+		),
 		football: developSeasonFootball(ratings as any, age, coachingRank),
 		hockey: developSeasonHockey(ratings as any, age, coachingRank),
 	});

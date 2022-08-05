@@ -6,8 +6,8 @@ const COMPOSITE_WEIGHTS: CompositeWeights<RatingKey> = {
 		ratings: ["spd", "jmp", "dnk", "tp", "drb", "pss"],
 	},
 	usage: {
-		ratings: ["ins", "dnk", "fg", "tp", "spd", "hgt", "drb", "oiq"],
-		weights: [1.5, 1, 1, 1, 0.5, 0.5, 0.5, 0.5],
+		ratings: ["ins", "dnk", "fg", "tp", "spd", "hgt", "drb", "oiq", "diq"],
+		weights: [1.3, 1, 1.2, 1.1, 0.4, 0.5, 0.4, 0.5, 0.5],
 		skill: {
 			label: "V",
 			cutoff: 0.61,
@@ -30,8 +30,8 @@ const COMPOSITE_WEIGHTS: CompositeWeights<RatingKey> = {
 		},
 	},
 	turnovers: {
-		ratings: [50, "ins", "pss", "oiq"],
-		weights: [0.5, 1, 1, -1],
+		ratings: [20, "hgt", "ins", "pss", "oiq"],
+		weights: [0.5, 0.75, 0.25, 1, -1],
 	},
 	shootingAtRim: {
 		ratings: ["hgt", "stre", "dnk", "oiq"],

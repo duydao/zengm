@@ -82,6 +82,8 @@ export const monteCarloPot = async ({
 
 		maxOvrs.push(maxOvr);
 	}
+	maxOvrs.sort();
+	//console.log("Potential", maxOvrs[0], maxOvrs[maxOvrs.length-1]);
 
 	return orderBy(maxOvrs)[Math.floor(0.75 * NUM_SIMULATIONS)];
 };
@@ -114,6 +116,7 @@ const develop = async (
 		tid: number;
 		weight: number;
 		srID?: string;
+		pid?: number;
 	},
 	years: number = 1,
 	newPlayer: boolean = false,
@@ -121,6 +124,9 @@ const develop = async (
 	skipPot: boolean = false, // Only for making testing or core/debug faster
 ) => {
 	const ratings = p.ratings.at(-1)!;
+	ratings["pid"] = p.pid;
+	ratings["tid"] = p.tid;
+
 	let age = ratings.season - p.born.year;
 
 	for (let i = 0; i < years; i++) {

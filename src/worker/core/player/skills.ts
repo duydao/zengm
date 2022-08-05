@@ -20,13 +20,21 @@ const hasSkill = (
  *
  * Keep cutoffs in sync with GameSim.js!
  */
-const skills = (playerRatings: MinimalPlayerRatings) => {
+const skills = (
+	playerRatings: MinimalPlayerRatings,
+	percentRank?: (key: string, rating: number, ranking: number) => boolean,
+) => {
 	const sk: string[] = [];
 
 	for (const key of Object.keys(COMPOSITE_WEIGHTS)) {
 		const { ratings, skill, weights } = COMPOSITE_WEIGHTS[key];
 
-		if (skill) {
+		if (skill && percentRank) {
+			const cr = compositeRating(playerRatings, ratings, weights, true);
+			if (percentRank(key, cr, 15)) {
+				sk.push(skill.label);
+			}
+		} else if (skill) {
 			if (hasSkill(playerRatings, ratings, weights, skill.cutoff)) {
 				sk.push(skill.label);
 			}

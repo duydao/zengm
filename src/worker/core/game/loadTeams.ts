@@ -259,9 +259,16 @@ const processTeam = (
 		}
 		t.pace = t.pace * 15 + 100; // Scale between 100 and 115
 
+		// LAL
+		if (t.id === g.get("userTid")) {
+			// use manager
+			//t.pace *= 1.15;
+		}
+
 		if (allStarGame) {
 			t.pace *= 1.15;
 		}
+		//console.log("team pace, team:", t.id, ", pace:", t.pace)
 	}
 
 	t.stat = { ...teamStats, pts: 0, ptsQtrs: isSport("baseball") ? [] : [0] };

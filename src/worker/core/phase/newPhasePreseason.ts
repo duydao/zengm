@@ -14,6 +14,10 @@ import type {
 	RealTeamInfo,
 } from "../../../common/types";
 import { groupBy } from "../../../common/groupBy";
+import skills from "../player/skills";
+import compositeRating from "../player/compositeRating";
+import { COMPOSITE_WEIGHTS } from "../../../common/constants.basketball";
+import { percentile } from "../../../mod/util";
 
 const newPhasePreseason = async (
 	conditions: Conditions,
@@ -334,6 +338,39 @@ const newPhasePreseason = async (
 		if (!repeatSeason) {
 			// Update player values after ratings changes
 			await player.updateValues(p);
+		}
+
+		await idb.cache.players.put(p);
+	}
+
+	const m: { [key: string]: number[] } = {};
+	for (const k of Object.keys(COMPOSITE_WEIGHTS)) {
+		if (!m[k]) {
+			m[k] = new Array(players.length).fill(0);
+		}
+		for (const p of players) {
+			m[k].push(
+				compositeRating(
+					p.ratings[p.ratings.length - 1],
+					COMPOSITE_WEIGHTS[k].ratings,
+					COMPOSITE_WEIGHTS[k].weights,
+					false,
+				) || Number.NEGATIVE_INFINITY,
+			);
+		}
+		m[k].sort((a, b) => a - b);
+	}
+
+	// update skills
+	for (const p of players) {
+		if (!repeatSeason) {
+			// Update player values after ratings changes
+			p.ratings[p.ratings.length - 1].skills = skills(
+				p.ratings[p.ratings.length - 1],
+				(key, rating, ranking) => {
+					return rating >= percentile(m[key], 1 - 15 / players.length);
+				},
+			);
 		}
 
 		await idb.cache.players.put(p);
